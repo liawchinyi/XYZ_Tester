@@ -1,4 +1,3 @@
-
 import serial
 import time
 import re # Import regex module for robust stripping
@@ -23,19 +22,19 @@ last_e_positions = {}
 # This helps optimize Z lifts/lowers for consecutive operations on the same knob.
 current_printer_xy_pos = (None, None) 
 
-def read_voltage_xdm1000(serial_object):
+def read_resistance_xdm1000(serial_object):
     """
-    Reads the DC voltage value from an XDM1000 series multimeter using SCPI commands.
+    Reads the DC resistance value from an XDM1000 series multimeter using SCPI commands.
     Assumes the serial port object for the multimeter is already open and configured.
 
     Args:
         serial_object (serial.Serial): The already open pyserial Serial object for the multimeter.
 
     Returns:
-        float or None: The DC voltage value in Volts, or None if an error occurs.
+        float or None: The DC resistance value in Ohms, or None if an error occurs.
     """
     if serial_object is None or not serial_object.is_open:
-        print("Error: Multimeter serial port is not open. Cannot read voltage.")
+        print("Error: Multimeter serial port is not open. Cannot read resistance.")
         return None
 
     try:
@@ -43,38 +42,34 @@ def read_voltage_xdm1000(serial_object):
         serial_object.reset_input_buffer()
         serial_object.reset_output_buffer()
 
-        # 1. Configure the multimeter to measure DC Voltage
-        print("  Sending: CONFigure:VOLT:DC")
-        serial_object.write(b"CONFigure:VOLT:DC\n")
-        time.sleep(0.5) # Increased delay for function change to settle
+        # 1. Set the multimeter to measure resistance
+        print("  Sending: FUNCtion 'RESistance'") 
+        serial_object.write(b"FUNCtion 'RESistance'\n")
+        time.sleep(0.1) # Short delay for command processing
 
-        # 2. Set auto-ranging for DC Voltage
-        print("  Sending: VOLTage:DC:RANGe AUTO")
-        serial_object.write(b"VOLTage:DC:RANGe AUTO\n")
-        time.sleep(0.2) # Short delay for auto-range command
-
-        # 3. Request the measurement reading
-        print("  Sending: MEAS1:SHOW?") # Using the documented measurement query
-        serial_object.write(b"MEAS1:SHOW?\n")
+        # 2. Request the resistance measurement
+        print("  Sending: MEASure:RESistance?") 
+        serial_object.write(b"MEASure:RESistance?\n")
         
-        # Read the response
-        response = serial_object.readline().decode('utf-8').strip()
-        print(f"  Raw Multimeter Response: '{response}'") # Print raw response for debugging
+        # 3. Read the response
+        response = serial_object.readline() # Read bytes directly
+        # Attempt decoding with 'latin-1' as it successfully resolved previous errors
+        decoded_response = response.decode('latin-1').strip()
+        print(f"  Raw Multimeter Response (decoded with latin-1): '{decoded_response}'") # Print raw response for debugging
         
         # Parse the response
-        if response:
-            # --- Strip non-numeric characters from the end of the response ---
+        if decoded_response:
             # This regex matches any non-digit, non-decimal point, non-sign character at the end of the string
-            # and removes it. This handles units like 'VDC', 'V', 'mV', 'A', 'ohm', etc.
-            numeric_response = re.sub(r'[^\d.+\-eE]*$', '', response) 
+            # and removes it. This handles units like 'VDC', 'V', 'mV', 'A', 'ohm', '¦¸', etc.
+            numeric_response = re.sub(r'[^\d.+\-eE]*$', '', decoded_response) 
             # Remove any leading/trailing whitespace again after stripping
             numeric_response = numeric_response.strip()
 
             try:
-                voltage = float(numeric_response)
-                return voltage
+                resistance = float(numeric_response)
+                return resistance
             except ValueError:
-                print(f"Error: Could not convert multimeter response to float: '{response}' (after stripping: '{numeric_response}')")
+                print(f"Error: Could not convert multimeter response to float: '{decoded_response}' (after stripping: '{numeric_response}')")
                 return None
         else:
             print("Error: No response received from multimeter within timeout.")
@@ -309,8 +304,8 @@ MULTIMETER_PORT = 'COM13'
 MULTIMETER_BAUDRATE = 115200 
 
 # CSV Output File
-OUTPUT_CSV_FILE = 'resistance_voltage_measurements.csv' 
-PLOT_OUTPUT_FILE = 'resistance_voltage_plot.png' 
+OUTPUT_CSV_FILE = 'resistance_measurements.csv' 
+PLOT_OUTPUT_FILE = 'resistance_plot.png' 
 
 # Define XY Coordinates for each Decade Knob on the 1433F and their Expected Resistance Ranges
 path_points = [
@@ -331,8 +326,8 @@ if __name__ == "__main__":
     measurement_data = [] 
     
     # Lists to store data for plotting (only successful measurements)
-    plotted_resistances = []
-    plotted_voltages = []
+    plotted_resistances_commanded = [] 
+    plotted_resistances_measured = []  
 
     min_desired_resistance = None
     max_desired_resistance = None
@@ -367,21 +362,24 @@ if __name__ == "__main__":
 
 
     print(f"\nPlanning and generating paths to set total resistance values between {min_desired_resistance} Ohms and {max_desired_resistance} Ohms with a step of {desired_resistance_step} Ohms.")
-    print("For each set resistance, a DC voltage reading will be taken from the multimeter.")
-    print(f"The commanded knob settings and measured voltages will be recorded to '{OUTPUT_CSV_FILE}'.")
-    print(f"A plot of Resistance vs. Voltage will be saved to '{PLOT_OUTPUT_FILE}'.")
+    print("For each set resistance, a DC resistance reading will be taken from the multimeter.") 
+    print(f"The commanded knob settings and measured resistances will be recorded to '{OUTPUT_CSV_FILE}'.") 
+    print(f"A plot of Commanded Resistance vs. Measured Resistance will be saved to '{PLOT_OUTPUT_FILE}'.") 
 
     # --- Plotting setup (Interactive Mode) ---
     plt.ion() # Turn on interactive mode
     fig, ax = plt.subplots(figsize=(10, 6))
     line, = ax.plot([], [], marker='o', linestyle='-', color='blue') # Create an empty line object
-    ax.set_title('Resistance vs. Voltage Measurement Sweep (Live)')
-    ax.set_xlabel('Commanded Resistance (Ohms)')
-    ax.set_ylabel('Measured Voltage (Volts)')
+    ax.set_title('Commanded Resistance vs. Measured Resistance Sweep (Live)') 
+    ax.set_xlabel('Commanded Resistance (Ohms)') 
+    ax.set_ylabel('Measured Resistance (Ohms)') 
     ax.grid(True)
-    # Set initial reasonable limits or allow them to auto-adjust by default
-    ax.set_xlim(min_desired_resistance - (desired_resistance_step * 2), max_desired_resistance + (desired_resistance_step * 2))
-    ax.set_ylim(-0.1, 5.0) # Example: Adjust based on expected voltage range
+    
+    # Set initial reasonable limits for resistance
+    initial_x_min = min_desired_resistance * 0.9 if min_desired_resistance > 0 else -10 
+    initial_x_max = max_desired_resistance * 1.1 if max_desired_resistance > 0 else 10 
+    ax.set_xlim(initial_x_min, initial_x_max)
+    ax.set_ylim(initial_x_min, initial_x_max) 
 
     try:
         printer_ser = serial.Serial(PRINTER_PORT, PRINTER_BAUDRATE, timeout=5)
@@ -419,8 +417,8 @@ if __name__ == "__main__":
         # Initialize current_printer_xy_pos with the actual home position after G28
         current_printer_xy_pos = (0.0, 0.0) 
 
-        print("\n--- Starting Targeted Resistance Setting & Voltage Measurement Sequence ---")
-        measurement_data.append(['Target_Resistance_Ohms', 'Measured_Voltage_Volts', 'Knob_Settings_Applied']) 
+        print("\n--- Starting Targeted Resistance Setting & Resistance Measurement Sequence ---") 
+        measurement_data.append(['Target_Resistance_Ohms', 'Measured_Resistance_Ohms', 'Knob_Settings_Applied']) 
 
         target_resistances_to_find = []
         current_target = min_desired_resistance
@@ -446,43 +444,56 @@ if __name__ == "__main__":
                 last_e_positions
             )
             
-            print(f"  Taking DC Voltage measurement...")
-            voltage_value = read_voltage_xdm1000(multimeter_ser)
+            print(f"  Taking DC Resistance measurement...") 
+            measured_r_data = read_resistance_xdm1000(multimeter_ser) 
             
-            if voltage_value is not None:
-                print(f"  Target Resistance {target_r:.2f} Ohms: Measured Voltage {voltage_value:.4f} Volts. Settings: {knob_settings_applied_str}")
-                measurement_data.append([target_r, voltage_value, knob_settings_applied_str])
-                plotted_resistances.append(target_r)
-                plotted_voltages.append(voltage_value)
+            if measured_r_data is not None:
+                print(f"  Target Resistance {target_r:.2f} Ohms: Measured Resistance {measured_r_data:.4f} Ohms. Settings: {knob_settings_applied_str}") 
+                measurement_data.append([target_r, measured_r_data, knob_settings_applied_str])
+                plotted_resistances_commanded.append(target_r)
+                plotted_resistances_measured.append(measured_r_data)
 
                 # --- Live Plot Update ---
-                line.set_data(plotted_resistances, plotted_voltages)
-                # Adjust x-axis limits dynamically to fit new data
-                ax.set_xlim(min(plotted_resistances) * 0.9, max(plotted_resistances) * 1.1)
-                # Adjust y-axis limits dynamically
-                if plotted_voltages: # Avoid error if list is empty
-                    ax.set_ylim(min(plotted_voltages) * 0.9 if min(plotted_voltages) < 0 else min(plotted_voltages) * 0.9, 
-                                max(plotted_voltages) * 1.1 if max(plotted_voltages) > 0 else max(plotted_voltages) * 1.1)
+                line.set_data(plotted_resistances_commanded, plotted_resistances_measured)
+                
+                # Dynamic X-axis adjustment
+                ax.set_xlim(min(plotted_resistances_commanded) * 0.9, max(plotted_resistances_commanded) * 1.1)
+                
+                # Dynamic Y-axis adjustment for measured resistance
+                if plotted_resistances_measured:
+                    y_min = min(plotted_resistances_measured)
+                    y_max = max(plotted_resistances_measured)
+                    y_range = y_max - y_min
+                    padding = y_range * 0.1 if y_range > 0 else 0.1 
+                    # Ensure minimum is not above max + padding for very small ranges
+                    adjusted_y_min = y_min - padding
+                    adjusted_y_max = y_max + padding
+                    if adjusted_y_min >= adjusted_y_max: # Handle cases where range is almost zero
+                         adjusted_y_min = y_min - 0.1
+                         adjusted_y_max = y_max + 0.1
+                    ax.set_ylim(adjusted_y_min, adjusted_y_max)
+
+
                 fig.canvas.draw()
                 fig.canvas.flush_events()
                 plt.pause(0.01) # Short pause to allow plot to render
             else:
-                print(f"  Target Resistance {target_r:.2f} Ohms: Failed to get voltage measurement. Recording 'ERROR'. Settings: {knob_settings_applied_str}")
+                print(f"  Target Resistance {target_r:.2f} Ohms: Failed to get resistance measurement. Recording 'ERROR'. Settings: {knob_settings_applied_str}") 
                 measurement_data.append([target_r, "ERROR", knob_settings_applied_str])
 
-        print("\n--- All Targeted Resistance Setting & Voltage Measurement Sequence Complete ---")
-        send_gcode(printer_ser, "G1 Z0 F1000") # Final Z lift
+        print("\n--- All Targeted Resistance Setting & Resistance Measurement Sequence Complete ---") 
+        send_gcode(printer_ser, "G1 Z0 F1000") 
         send_gcode(printer_ser, "M400")
         send_gcode(printer_ser, "M18")       
 
-        print(f"\nSaving all commanded settings and measured voltages to {OUTPUT_CSV_FILE}...")
+        print(f"\nSaving all commanded settings and measured resistances to {OUTPUT_CSV_FILE}...") 
         with open(OUTPUT_CSV_FILE, 'w', newline='') as csvfile:
             csv_writer = csv.writer(csvfile)
             csv_writer.writerows(measurement_data)
         print(f"Data saved successfully. You can find the data in '{OUTPUT_CSV_FILE}'.")
 
         # --- Final Plot Saving ---
-        if plotted_resistances and plotted_voltages:
+        if plotted_resistances_commanded and plotted_resistances_measured:
             print(f"\nSaving final plot to '{PLOT_OUTPUT_FILE}'...")
             plt.ioff() # Turn off interactive mode
             plt.tight_layout() # Adjust layout to prevent labels overlapping
@@ -490,10 +501,10 @@ if __name__ == "__main__":
             print(f"Plot saved successfully to '{PLOT_OUTPUT_FILE}'.")
             plt.show() # Display the final plot and keep it open
         else:
-            print("\nSkipping plot generation: No successful voltage measurements to plot.")
+            print("\nSkipping plot generation: No successful resistance measurements to plot.") 
             plt.ioff() # Ensure interactive mode is off even if no plot
 
-        print(f"\n--- Summary of Commanded Resistance Settings and Measured Voltages for Range "
+        print(f"\n--- Summary of Commanded Resistance Settings and Measured Resistances for Range " 
               f"({min_desired_resistance} - {max_desired_resistance} Ohms, step {desired_resistance_step}) ---")
         
         summary_rows = [row for row in measurement_data[1:]]
@@ -502,12 +513,12 @@ if __name__ == "__main__":
             print("No data was recorded for the summary.")
         else:
             for row in summary_rows:
-                target_r, measured_v_data, knob_settings = row 
+                target_r, measured_r_data, knob_settings = row 
                 
-                if measured_v_data == "ERROR":
-                    print(f"  Target Resistance {float(target_r):.2f} Ohms: Measured Voltage: Measurement Failed. Settings: {knob_settings}")
+                if measured_r_data == "ERROR":
+                    print(f"  Target Resistance {float(target_r):.2f} Ohms: Measured Resistance: Measurement Failed. Settings: {knob_settings}") 
                 else:
-                    print(f"  Target Resistance {float(target_r):.2f} Ohms: Measured Voltage {float(measured_v_data):.4f} Volts. Settings: {knob_settings}")
+                    print(f"  Target Resistance {float(target_r):.2f} Ohms: Measured Resistance {float(measured_r_data):.4f} Ohms. Settings: {knob_settings}") 
 
     except serial.SerialException as e:
         print(f"Connection Error: {e}")
@@ -521,4 +532,3 @@ if __name__ == "__main__":
         if multimeter_ser is not None and multimeter_ser.is_open:
             multimeter_ser.close()
             print("Multimeter serial port closed.")
-
