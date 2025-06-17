@@ -1,3 +1,9 @@
+'''
+Name: Chin-Yi LIAW
+Company: National Metrology Centre
+Date: 17 June 2025
+'''
+
 import serial
 import time
 import re # Import regex module for robust stripping
